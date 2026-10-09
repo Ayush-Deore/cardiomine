@@ -245,7 +245,54 @@ with st.sidebar:
             from etl.transform import transform
             clean_df = transform(raw_df)
             st.session_state["main_df"] = clean_df
-            st.success("Dataset loaded successfully!")
+
+            # ── Auto-train mining models ──────────────────────────
+            with st.spinner("🔄 Training mining models on uploaded dataset…"):
+                try:
+                    from mining.preprocess import prepare_classification_data, prepare_clustering_data
+                    from mining import classification as clf_mod
+                    from mining import clustering as clust_mod
+                    from mining import regression as reg_mod
+
+                    # Classification
+                    X_train, X_test, y_train, y_test, feat_names = prepare_classification_data(clean_df)
+                    rf  = clf_mod.train_random_forest(X_train, y_train)
+                    lr  = clf_mod.train_logistic_regression(X_train, y_train)
+                    j48 = clf_mod.train_j48(X_train, y_train)
+                    nb  = clf_mod.train_naive_bayes(X_train, y_train)
+                    all_metrics = {
+                        "random_forest":       clf_mod.evaluate_model(rf,  X_test, y_test, "Random Forest"),
+                        "logistic_regression": clf_mod.evaluate_model(lr,  X_test, y_test, "Logistic Regression"),
+                        "j48":                 clf_mod.evaluate_model(j48, X_test, y_test, "J48 Decision Tree"),
+                        "naive_bayes":         clf_mod.evaluate_model(nb,  X_test, y_test, "Naive Bayes"),
+                    }
+                    fi = clf_mod.get_feature_importance(rf, feat_names)
+                    all_metrics["random_forest"]["feature_importance"] = fi.to_dict("records")
+                    all_metrics["j48"]["tree_text"] = clf_mod.get_j48_text(j48, feat_names)
+                    all_metrics["j48"]["feature_importance"] = clf_mod.get_feature_importance(j48, feat_names).to_dict("records")
+                    all_metrics["logistic_regression"]["coefficients"] = clf_mod.get_logistic_coefficients(lr, feat_names).to_dict("records")
+                    all_metrics["naive_bayes"]["class_stats"] = clf_mod.get_nb_class_stats(nb, feat_names)
+                    clf_mod.save_model(rf, lr, j48, nb, feat_names, all_metrics)
+
+                    # Clustering
+                    X_scaled, scaler, clust_feats = prepare_clustering_data(clean_df)
+                    elbow = clust_mod.elbow_analysis(X_scaled)
+                    km = clust_mod.train_kmeans(X_scaled, n_clusters=3)
+                    profiles = clust_mod.get_cluster_profiles(clean_df, km.labels_, clust_feats)
+                    clust_mod.save_cluster_model(km, scaler, clust_feats, profiles, elbow)
+
+                    # Regression
+                    reg_mod.train_regression(clean_df)
+
+                    # Clear cached resources so new models are picked up
+                    load_rf_model.clear()
+                    load_kmeans_model.clear()
+                    load_regression_pkg.clear()
+
+                    st.success("✅ Dataset loaded & mining models trained successfully!")
+                except Exception as train_err:
+                    st.warning(f"Dataset loaded, but model training failed: {train_err}")
+                    st.success("Dataset loaded successfully!")
         except Exception as e:
             st.error(f"Error processing dataset: {e}")
     st.divider()
